@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bingo</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  :root {
+    --bg-top: #3b1470;
+    --bg-bottom: #100822;
+    --panel: rgba(255,255,255,0.06);
+    --panel-strong: rgba(255,255,255,0.10);
+    --border: rgba(255,255,255,0.12);
+    --text: #f3f0fa;
+    --text-dim: rgba(243,240,250,0.65);
+    --col-b: #3b82f6;
+    --col-i: #6366f1;
+    --col-n: #a855f7;
+    --col-g: #10b981;
+    --col-o: #f97316;
+    --called: #16a34a;
+    --danger: #ef4444;
+    --gold: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, system-ui, sans-serif;
+    background: radial-gradient(circle at 50% -10%, var(--bg-top), var(--bg-bottom) 70%);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 10px;
+  }
+  h1 { font-size: 18px; margin: 0 0 10px; text-align:center; }
+  button {
+    background: var(--col-b); color:#fff; border:none; border-radius:10px;
+    padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer;
+  }
+  button:disabled { opacity:0.4; cursor:not-allowed; }
+  button.ghost { background: var(--panel-strong); color: var(--text); }
+  button.danger { background: var(--danger); }
+  button.gold { background: var(--gold); color:#241800; }
+
+  .screen { display:none; flex-direction:column; gap:10px; }
+  .screen.active { display:flex; }
+
+  /* ---- top info chips ---- */
+  .chip-row { display:flex; gap:6px; }
+  .chip {
+    flex:1; background: var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:6px 8px; text-align:center;
+  }
+  .chip .label { font-size:10px; color:var(--text-dim); display:block; }
+  .chip .value { font-size:14px; font-weight:700; }
+  .chip.timer .value { color: var(--gold); }
+
+  /* ---- lobby ---- */
+  .rooms { display:flex; flex-direction:column; gap:8px; }
+  .room-item {
+    display:flex; justify-content:space-between; align-items:center;
+    background: var(--panel); border:1px solid var(--border); border-radius:12px; padding:10px 14px;
+  }
+  .room-item .meta { font-size:12px; color:var(--text-dim); }
+
+  /* ---- cartela number picker ---- */
+  .picker-grid {
+    display:grid; grid-template-columns:repeat(8, 1fr); gap:5px;
+    max-height: 46vh; overflow-y:auto; padding:4px;
+    background: var(--panel); border:1px solid var(--border); border-radius:12px;
+  }
+  .picker-cell {
+    aspect-ratio:1; display:flex; align-items:center; justify-content:center;
+    background: var(--panel-strong); border-radius:6px; font-size:11px; font-weight:600;
+    cursor:pointer; border:1.5px solid transparent;
+  }
+  .picker-cell.taken { opacity:0.3; text-decoration:line-through; cursor:not-allowed; }
+  .picker-cell.selected { border-color: var(--gold); color: var(--gold); }
+
+  .preview-panel { background: var(--panel); border:1px solid var(--border); border-radius:12px; padding:10px; }
+  .preview-title { font-size:12px; color: var(--gold); text-align:center; margin-bottom:6px; font-weight:700; }
+
+  /* ---- shared bingo grid (5 cols) ---- */
+  .bgrid { display:grid; grid-template-columns:repeat(5, 1fr); gap:4px; max-width:320px; margin:0 auto; }
+  .bgrid .col-header {
+    text-align:center; font-weight:800; font-size:12px; border-radius:6px; padding:4px 0; color:#fff;
+  }
+  .bgrid .col-header.B { background: var(--col-b); }
+  .bgrid .col-header.I { background: var(--col-i); }
+  .bgrid .col-header.N { background: var(--col-n); }
+  .bgrid .col-header.G { background: var(--col-g); }
+  .bgrid .col-header.O { background: var(--col-o); }
+  .bcell {
+    aspect-ratio:1; display:flex; align-items:center; justify-content:center;
+    background: var(--panel-strong); border-radius:6px; font-size:13px; font-weight:700;
+  }
+  .bcell.marked { background: var(--called); color:#04220f; }
+  .bcell.free { background: var(--gold); color:#241800; }
+  .bcell.pattern { outline:2px solid var(--gold); }
+
+  /* ---- game screen layout ---- */
+  .game-layout { display:flex; gap:10px; align-items:flex-start; }
+  .master-board {
+    flex:1; display:grid; grid-template-columns:repeat(5, 1fr); gap:3px;
+    background: var(--panel); border:1px solid var(--border); border-radius:10px; padding:6px;
+  }
+  .master-board .mcell {
+    aspect-ratio:1; display:flex; align-items:center; justify-content:center;
+    background: var(--panel-strong); border-radius:4px; font-size:9px; font-weight:600; color:var(--text-dim);
+  }
+  .master-board .mcell.called { background: var(--called); color:#fff; }
+  .master-board .mcell.current { background: var(--gold); color:#241800; }
+
+  .side-panel { flex:1; display:flex; flex-direction:column; gap:10px; }
+  .caller-box {
+    background: var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px;
+    text-align:center;
+  }
+  .caller-ball {
+    width:76px; height:76px; border-radius:50%; margin:8px auto 0;
+    background: radial-gradient(circle at 35% 30%, #fff2, transparent), var(--col-n);
+    display:flex; align-items:center; justify-content:center; font-size:20px; font-weight:800;
+    border: 3px solid var(--gold);
+  }
+  .auto-toggle { display:flex; justify-content:space-between; align-items:center; font-size:12px; padding:8px 10px; background: var(--panel); border:1px solid var(--border); border-radius:10px; }
+  .switch { width:36px; height:20px; border-radius:20px; background: var(--panel-strong); position:relative; cursor:pointer; }
+  .switch.on { background: var(--col-g); }
+  .switch .knob { width:16px; height:16px; border-radius:50%; background:#fff; position:absolute; top:2px; left:2px; transition: left 0.15s; }
+  .switch.on .knob { left:18px; }
+
+  .cartela-label { text-align:center; font-size:12px; color:var(--gold); font-weight:700; }
+
+  .action-bar { display:flex; gap:8px; }
+  .action-bar button { flex:1; }
+
+  /* ---- watch-only ---- */
+  .watch-panel {
+    background: var(--panel); border:1px solid var(--border); border-radius:12px; padding:24px 16px;
+    text-align:center; display:flex; flex-direction:column; gap:10px; align-items:center; justify-content:center;
+  }
+  .watch-panel .eye { font-size:34px; }
+  .watch-panel h3 { margin:0; font-size:16px; }
+  .watch-panel p { margin:0; font-size:12px; color:var(--text-dim); max-width:260px; }
+
+  /* ---- winner modal ---- */
+  .overlay {
+    display:none; position:fixed; inset:0; background:rgba(5,2,15,0.75);
+    align-items:center; justify-content:center; z-index:50; padding:16px;
+  }
+  .overlay.active { display:flex; }
+  .winner-card {
+    background: linear-gradient(180deg, #241146, #150a2e); border:1px solid var(--border);
+    border-radius:16px; padding:24px 18px; text-align:center; max-width:340px; width:100%;
+  }
+  .winner-card .crown { font-size:38px; }
+  .winner-card h2 { color: var(--gold); margin:6px 0 2px; font-size:22px; }
+  .winner-card .sub { margin:0 0 14px; font-size:14px; }
+  .winner-card .label { font-size:12px; color:var(--text-dim); margin-bottom:8px; }
+  .auto-note { margin-top:14px; font-size:11px; color:var(--text-dim); }
+
+  .log { font-size:11px; color:var(--text-dim); max-height:60px; overflow:auto; margin-top:6px; }
+  .insufficient-banner {
+    background: rgba(239,68,68,0.15); border:1px solid var(--danger); border-radius:10px;
+    padding:8px 10px; font-size:12px; display:none; align-items:center; justify-content:space-between; gap:8px;
+  }
+  .insufficient-banner.active { display:flex; }
+</style>
+</head>
+<body>
+  <h1>🎱 Bingo</h1>
+
+  <div class="chip-row" id="topChips">
+    <div class="chip"><span class="label">Balance</span><span class="value" id="balanceChip">-</span></div>
+    <div class="chip"><span class="label">Stake</span><span class="value" id="stakeChip">-</span></div>
+    <div class="chip timer" id="timerChip" style="display:none;"><span class="label">Starts in</span><span class="value" id="timerValue">-</span></div>
+  </div>
+
+  <!-- LOBBY -->
+  <div id="lobbyScreen" class="screen active">
+    <div id="lobby" class="rooms"></div>
+  </div>
+
+  <!-- CARTELA SELECTION -->
+  <div id="selectionScreen" class="screen">
+    <div class="insufficient-banner" id="insufficientBanner">
+      <span>Not enough balance for this room's entry fee.</span>
+      <button class="gold" id="watchInsteadBtn" style="flex-shrink:0;">Watch only</button>
+    </div>
+    <p style="margin:0; font-size:12px; color:var(--text-dim); text-align:center;">Tap a number to preview that cartela</p>
+    <div class="picker-grid" id="pickerGrid"></div>
+    <div class="preview-panel" id="previewPanel" style="display:none;">
+      <div class="preview-title" id="previewTitle">Cartela No: -</div>
+      <div class="bgrid" id="previewGrid"></div>
+    </div>
+    <div class="action-bar">
+      <button id="confirmCartelaBtn" disabled>Confirm and join</button>
+      <button class="ghost" id="watchLinkBtn">Watch only</button>
+      <button class="ghost" id="cancelSelectionBtn">Back</button>
+    </div>
+  </div>
+
+  <!-- GAME (playing) -->
+  <div id="gameScreen" class="screen">
+    <div class="chip-row">
+      <div class="chip"><span class="label">Players</span><span class="value" id="playersChip">-</span></div>
+      <div class="chip"><span class="label">Bet</span><span class="value" id="betChip">-</span></div>
+      <div class="chip"><span class="label">Derash</span><span class="value" id="derashChip">-</span></div>
+      <div class="chip"><span class="label">Called</span><span class="value" id="calledChip">0</span></div>
+    </div>
+
+    <div class="game-layout">
+      <div class="master-board" id="masterBoard"></div>
+      <div class="side-panel">
+        <div class="caller-box">
+          <div style="font-size:11px; color:var(--text-dim);">Current number</div>
+          <div class="caller-ball" id="callerBall">--</div>
+        </div>
+        <div class="auto-toggle">
+          <span>Automatic marking</span>
+          <div class="switch on" id="autoSwitch"><div class="knob"></div></div>
+        </div>
+        <div class="cartela-label" id="cartelaLabel">Cartela No: -</div>
+        <div class="bgrid" id="ownGrid"></div>
+      </div>
+    </div>
+
+    <div class="action-bar">
+      <button class="danger" id="leaveBtn">Leave</button>
+      <button class="gold" id="claimBtn">Claim BINGO</button>
+    </div>
+  </div>
+
+  <!-- WATCH ONLY -->
+  <div id="watchScreen" class="screen">
+    <div class="chip-row">
+      <div class="chip"><span class="label">Players</span><span class="value" id="watchPlayersChip">-</span></div>
+      <div class="chip"><span class="label">Called</span><span class="value" id="watchCalledChip">0</span></div>
+    </div>
+    <div class="game-layout">
+      <div class="master-board" id="watchMasterBoard"></div>
+      <div class="watch-panel">
+        <div class="eye">👀</div>
+        <h3>Watching Only</h3>
+        <p>This round is already in progress, or your balance can't cover the entry fee. You can watch live and join the next round.</p>
+      </div>
+    </div>
+    <div class="action-bar">
+      <button class="danger" id="watchLeaveBtn">Leave</button>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <!-- WINNER MODAL -->
+  <div class="overlay" id="winnerOverlay">
+    <div class="winner-card">
+      <div class="crown">👑</div>
+      <h2>BINGO!</h2>
+      <p class="sub" id="winnerSub">-</p>
+      <div class="label" id="winnerCartelaLabel">Winning Cartela: -</div>
+      <div class="bgrid" id="winnerGrid"></div>
+      <div class="auto-note" id="autoNote">Auto-starting next round…</div>
+    </div>
+  </div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+
+const API_BASE = '/api';
+const COLS = ['B', 'I', 'N', 'G', 'O'];
+
+let token = null;
+let socket = null;
+let balance = 0;
+
+let currentRoomId = null;
+let entryFee = 0;
+let selectedCartelaId = null;
+let previewedGrid = null;
+
+let currentCard = null;    // { grid, marked, cartela_id }
+let calledSet = new Set();
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent = `${new Date().toLocaleTimeString()} - ${msg}\n` + el.textContent;
+}
+
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(API_BASE + path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    },
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+function setBalance(b) {
+  balance = b;
+  document.getElementById('balanceChip').textContent = b;
+}
+
+async function login() {
+  const initData = tg?.initData || JSON.stringify({ id: 'dev-' + Math.floor(Math.random()*10000), username: 'dev_player', first_name: 'Dev' });
+  const { token: t, player } = await api('/auth/telegram', {
+    method: 'POST',
+    body: JSON.stringify({ initData }),
+  });
+  token = t;
+  setBalance(player.balance);
+  connectSocket();
+  loadRooms();
+}
+
+function connectSocket() {
+  socket = io({ auth: { token } });
+
+  socket.on('connect', () => log('connected'));
+  socket.on('error', (e) => log('error: ' + e.message));
+
+  socket.on('room_update', (room) => {
+    if (room.id !== currentRoomId) return;
+    document.getElementById('playersChip').textContent = room.currentPlayers + '/' + room.maxPlayers;
+    document.getElementById('betChip').textContent = room.entryFee;
+    document.getElementById('derashChip').textContent = room.prizePool;
+    document.getElementById('watchPlayersChip').textContent = room.currentPlayers + '/' + room.maxPlayers;
+  });
+
+  socket.on('countdown_started', ({ ms }) => {
+    document.getElementById('timerChip').style.display = 'block';
+    let secondsLeft = Math.ceil(ms / 1000);
+    document.getElementById('timerValue').textContent = secondsLeft + 's';
+    const interval = setInterval(() => {
+      secondsLeft -= 1;
+      if (secondsLeft <= 0) { clearInterval(interval); document.getElementById('timerChip').style.display = 'none'; return; }
+      document.getElementById('timerValue').textContent = secondsLeft + 's';
+    }, 1000);
+  });
+
+  socket.on('game_started', () => {
+    if (currentCard) showScreen('gameScreen'); else showScreen('watchScreen');
+  });
+
+  socket.on('number_called', ({ number, calledNumbers }) => {
+    calledSet = new Set(calledNumbers);
+    document.getElementById('callerBall').textContent = numberLabel(number);
+    document.getElementById('calledChip').textContent = calledNumbers.length;
+    document.getElementById('watchCalledChip').textContent = calledNumbers.length;
+    renderMasterBoard('masterBoard');
+    renderMasterBoard('watchMasterBoard');
+    if (currentCard && document.getElementById('autoSwitch').classList.contains('on')) {
+      autoMark(number);
+    }
+  });
+
+  socket.on('winner', (data) => showWinner(data));
+  socket.on('game_voided', () => { log('Round voided - no winner'); scheduleReturnToLobby(4000); });
+  socket.on('claim_rejected', ({ reason }) => log('Claim rejected: ' + reason));
+}
+
+function numberLabel(n) {
+  const col = COLS[Math.floor((n - 1) / 15)];
+  return `${col}-${n}`;
+}
+
+/* ---------------- Lobby ---------------- */
+
+async function loadRooms() {
+  const { rooms } = await api('/rooms');
+  const lobby = document.getElementById('lobby');
+  lobby.innerHTML = '';
+  if (rooms.length === 0) {
+    lobby.innerHTML = '<p style="opacity:0.6; text-align:center;">No open rooms right now.</p>';
+    return;
+  }
+  for (const room of rooms) {
+    const div = document.createElement('div');
+    div.className = 'room-item';
+    div.innerHTML = `<div><div>Room #${room.id}</div><div class="meta">Fee ${room.entry_fee} &middot; ${room.current_players}/${room.max_players}</div></div>`;
+    const btn = document.createElement('button');
+    btn.textContent = 'Join';
+    btn.onclick = () => openSelection(room);
+    div.appendChild(btn);
+    lobby.appendChild(div);
+  }
+}
+
+/* ---------------- Cartela selection ---------------- */
+
+function openSelection(room) {
+  currentRoomId = room.id;
+  entryFee = room.entry_fee;
+  selectedCartelaId = null;
+  previewedGrid = null;
+  document.getElementById('stakeChip').textContent = entryFee;
+  document.getElementById('confirmCartelaBtn').disabled = true;
+  document.getElementById('previewPanel').style.display = 'none';
+  document.getElementById('insufficientBanner').classList.remove('active');
+  showScreen('selectionScreen');
+
+  socket.emit('list_cartelas', { roomId: currentRoomId }, (res) => {
+    if (!res.ok) { log('Could not load cartelas: ' + res.error); return; }
+    renderPicker(res.ids, res.taken);
+  });
+}
+
+function renderPicker(ids, taken) {
+  const grid = document.getElementById('pickerGrid');
+  grid.innerHTML = '';
+  const takenSet = new Set(taken);
+  ids.forEach((id) => {
+    const cell = document.createElement('div');
+    cell.className = 'picker-cell' + (takenSet.has(id) ? ' taken' : '') + (id === selectedCartelaId ? ' selected' : '');
+    cell.textContent = id;
+    if (!takenSet.has(id)) {
+      cell.onclick = () => previewCartela(id);
+    }
+    grid.appendChild(cell);
+  });
+}
+
+function previewCartela(id) {
+  socket.emit('preview_cartela', { roomId: currentRoomId, cartelaId: id }, (res) => {
+    if (!res.ok) { log('Preview failed: ' + res.error); return; }
+    if (res.taken) { log('That cartela was just taken'); return; }
+    selectedCartelaId = id;
+    previewedGrid = res.grid;
+    document.getElementById('previewTitle').textContent = `Cartela No: ${id}`;
+    document.getElementById('previewPanel').style.display = 'block';
+    document.getElementById('confirmCartelaBtn').disabled = false;
+    renderStaticGrid('previewGrid', previewedGrid, []);
+    document.querySelectorAll('#pickerGrid .picker-cell').forEach((el) => el.classList.remove('selected'));
+    [...document.getElementById('pickerGrid').children].find((el) => el.textContent == id)?.classList.add('selected');
+  });
+}
+
+document.getElementById('confirmCartelaBtn').onclick = () => {
+  if (selectedCartelaId === null) return;
+  socket.emit('select_cartela', { roomId: currentRoomId, cartelaId: selectedCartelaId }, (res) => {
+    if (!res.ok) {
+      if (res.code === 'insufficient_balance') {
+        document.getElementById('insufficientBanner').classList.add('active');
+      } else {
+        log('Join failed: ' + res.error);
+      }
+      return;
+    }
+    currentCard = res.card;
+    setBalance(balance - entryFee);
+    document.getElementById('cartelaLabel').textContent = `Cartela No: ${currentCard.cartela_id}`;
+    document.getElementById('playersChip').textContent = res.room.currentPlayers + '/' + res.room.maxPlayers;
+    document.getElementById('betChip').textContent = res.room.entryFee;
+    document.getElementById('derashChip').textContent = res.room.prizePool;
+    calledSet = new Set(res.room.calledNumbers || []);
+    renderOwnGrid();
+    renderMasterBoard('masterBoard');
+    showScreen('gameScreen');
+    log(`Joined room #${currentRoomId} with cartela #${currentCard.cartela_id}`);
+  });
+};
+
+document.getElementById('watchInsteadBtn').onclick = () => enterWatchMode();
+document.getElementById('watchLinkBtn').onclick = () => enterWatchMode();
+document.getElementById('cancelSelectionBtn').onclick = () => {
+  currentRoomId = null;
+  showScreen('lobbyScreen');
+};
+
+function enterWatchMode() {
+  socket.emit('watch_room', { roomId: currentRoomId }, (res) => {
+    if (!res.ok) { log('Could not enter watch mode: ' + res.error); return; }
+    currentCard = null;
+    calledSet = new Set(res.room.calledNumbers || []);
+    document.getElementById('watchPlayersChip').textContent = res.room.currentPlayers + '/' + res.room.maxPlayers;
+    renderMasterBoard('watchMasterBoard');
+    showScreen('watchScreen');
+    log(`Watching room #${currentRoomId}`);
+  });
+}
+
+/* ---------------- Boards ---------------- */
+
+function renderMasterBoard(elementId) {
+  const el = document.getElementById(elementId);
+  el.innerHTML = '';
+  for (let n = 1; n <= 75; n++) {
+    const cell = document.createElement('div');
+    cell.className = 'mcell' + (calledSet.has(n) ? ' called' : '');
+    cell.textContent = n;
+    el.appendChild(cell);
+  }
+}
+
+function renderStaticGrid(elementId, grid, markedList) {
+  const el = document.getElementById(elementId);
+  el.innerHTML = '';
+  COLS.forEach((c) => {
+    const h = document.createElement('div');
+    h.className = 'col-header ' + c;
+    h.textContent = c;
+    el.appendChild(h);
+  });
+  for (let row = 0; row < 5; row++) {
+    COLS.forEach((c) => {
+      const value = grid[c][row];
+      const cell = document.createElement('div');
+      cell.className = 'bcell' + (value === 'FREE' ? ' free' : '') + (markedList.includes(value) ? ' marked' : '');
+      cell.textContent = value === 'FREE' ? '★' : value;
+      el.appendChild(cell);
+    });
+  }
+}
+
+function renderOwnGrid() {
+  const el = document.getElementById('ownGrid');
+  el.innerHTML = '';
+  COLS.forEach((c) => {
+    const h = document.createElement('div');
+    h.className = 'col-header ' + c;
+    h.textContent = c;
+    el.appendChild(h);
+  });
+  for (let row = 0; row < 5; row++) {
+    COLS.forEach((c) => {
+      const value = currentCard.grid[c][row];
+      const cell = document.createElement('div');
+      cell.className = 'bcell' + (value === 'FREE' ? ' free' : '');
+      cell.textContent = value === 'FREE' ? '★' : value;
+      if (currentCard.marked.includes(value)) cell.classList.add('marked');
+      cell.onclick = () => {
+        if (value === 'FREE') return;
+        socket.emit('mark_number', { roomId: currentRoomId, number: value }, (res) => {
+          if (res.ok) { currentCard = res.card; renderOwnGrid(); }
+        });
+      };
+      el.appendChild(cell);
+    });
+  }
+}
+
+function autoMark(number) {
+  const flat = COLS.flatMap((c) => currentCard.grid[c]);
+  if (!flat.includes(number)) return;
+  socket.emit('mark_number', { roomId: currentRoomId, number }, (res) => {
+    if (res.ok) { currentCard = res.card; renderOwnGrid(); }
+  });
+}
+
+document.getElementById('autoSwitch').onclick = function () { this.classList.toggle('on'); };
+
+/* ---------------- Actions ---------------- */
+
+document.getElementById('claimBtn').onclick = () => {
+  socket.emit('claim_bingo', { roomId: currentRoomId }, (res) => {
+    if (!res.ok) { log('Claim error: ' + res.error); return; }
+    log(res.won ? `You won! ${res.pattern}` : `Not a valid claim: ${res.reason || ''}`);
+  });
+};
+
+function leaveCurrentRoom() {
+  if (currentRoomId) socket.emit('leave_room', { roomId: currentRoomId });
+  currentRoomId = null;
+  currentCard = null;
+  calledSet = new Set();
+  document.getElementById('timerChip').style.display = 'none';
+  showScreen('lobbyScreen');
+  loadRooms();
+}
+
+document.getElementById('leaveBtn').onclick = leaveCurrentRoom;
+document.getElementById('watchLeaveBtn').onclick = leaveCurrentRoom;
+
+/* ---------------- Winner modal ---------------- */
+
+function showWinner(data) {
+  document.getElementById('winnerSub').textContent = `${data.username} won ${data.prize} (${data.pattern})`;
+  document.getElementById('winnerCartelaLabel').textContent = `Winning Cartela: ${data.cartelaId ?? '-'}`;
+  if (data.grid) renderStaticGrid('winnerGrid', data.grid, []);
+  document.getElementById('winnerOverlay').classList.add('active');
+
+  let secondsLeft = 6;
+  document.getElementById('autoNote').textContent = `Auto-starting next round in ${secondsLeft}s`;
+  const interval = setInterval(() => {
+    secondsLeft -= 1;
+    if (secondsLeft <= 0) {
+      clearInterval(interval);
+      document.getElementById('winnerOverlay').classList.remove('active');
+      leaveCurrentRoom();
+      return;
+    }
+    document.getElementById('autoNote').textContent = `Auto-starting next round in ${secondsLeft}s`;
+  }, 1000);
+}
+
+function scheduleReturnToLobby(ms) {
+  setTimeout(() => leaveCurrentRoom(), ms);
+}
+
+login().catch((e) => log('Login failed: ' + e.message));
+</script>
+</body>
+</html>
